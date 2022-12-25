@@ -92,38 +92,75 @@ class Agent:
             self.first_iter = False
             return 1 # make a definite buy on the first iter
 
-        action_probs = self.model.predict(state)
+        action_probs = self.model.predict(state, verbose=0)
         return np.argmax(action_probs[0])
 
     def train_experience_replay(self, batch_size):
         """Train on previous experiences in memory
         """
-        mini_batch = random.sample(self.memory, batch_size)
+        minibatch = random.sample(self.memory, min(len(self.memory), batch_size))
+
+        state = np.zeros((batch_size, self.state_size))
+        next_state = np.zeros((batch_size, self.state_size))
+        action, reward, done = [], [], []
+
+        # do this before prediction
+        # for speedup, this could be done on the tensor level
+        # but easier to understand using a loop
+        for i in range(batch_size):
+            state[i] = minibatch[i][0]
+            action.append(minibatch[i][1])
+            reward.append(minibatch[i][2])
+            next_state[i] = minibatch[i][3]
+            done.append(minibatch[i][4])
+
+        # do batch prediction to save speed
+        target = self.model.predict(state, verbose=0)
+        target_next = self.model.predict(next_state, verbose=0)
         X_train, y_train = [], []
         
         # DQN
         if self.strategy == "dqn":
-            for state, action, reward, next_state, done in mini_batch:
-                if done:
-                    target = reward
+            for i in range(batch_size):
+            # correction on the Q value for the action used
+                if done[i]:
+                    target[i][action[i]] = reward[i]
                 else:
-                    # approximate deep q-learning equation
-                    target = reward + self.gamma * np.amax(self.model.predict(next_state)[0])
+                    # Standard - DQN
+                    # DQN chooses the max Q value among next actions
+                    # selection and evaluation of action is on the target Q Network
+                    # Q_max = max_a' Q_target(s', a')
+                    target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
+        else:
+            raise NotImplementedError()
+        # update q-function parameters based on huber loss gradient
+        loss = self.model.fit(state, target, batch_size=batch_size, verbose=0).history["loss"][0]
 
-                # estimate q-values based on current state
-                q_values = self.model.predict(state)
-                # update the target for current action based on discounted reward
-                q_values[0][action] = target
+        # as the training goes on we want the agent to
+        # make less random and more optimal decisions
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+        return loss
 
-                X_train.append(state[0])
-                y_train.append(q_values[0])
+    def save(self, episode):
+        self.model.save("models/{}_{}".format(self.model_name, episode))
 
-        # DQN with fixed targets
-        elif self.strategy == "t-dqn":
+    def load(self):
+        return load_model("models/" + self.model_name, custom_objects=self.custom_objects)
+        """elif self.strategy == "t-dqn":
             if self.n_iter % self.reset_every == 0:
                 # reset target model weights
                 self.target_model.set_weights(self.model.get_weights())
-
+            for i in range(batch_size):
+            # correction on the Q value for the action used
+                if done[i]:
+                    target[i][action[i]] = reward[i]
+                else:
+                    # Standard - DQN
+                    # DQN chooses the max Q value among next actions
+                    # selection and evaluation of action is on the target Q Network
+                    # Q_max = max_a' Q_target(s', a')
+                    target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
             for state, action, reward, next_state, done in mini_batch:
                 if done:
                     target = reward
@@ -158,26 +195,4 @@ class Agent:
                 q_values[0][action] = target
 
                 X_train.append(state[0])
-                y_train.append(q_values[0])
-                
-        else:
-            raise NotImplementedError()
-
-        # update q-function parameters based on huber loss gradient
-        loss = self.model.fit(
-            np.array(X_train), np.array(y_train),
-            epochs=1, verbose=0
-        ).history["loss"][0]
-
-        # as the training goes on we want the agent to
-        # make less random and more optimal decisions
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-        return loss
-
-    def save(self, episode):
-        self.model.save("models/{}_{}".format(self.model_name, episode))
-
-    def load(self):
-        return load_model("models/" + self.model_name, custom_objects=self.custom_objects)
+                y_train.append(q_values[0]) """     
