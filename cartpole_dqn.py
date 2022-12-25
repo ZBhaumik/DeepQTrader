@@ -37,19 +37,44 @@ class DQNAgent:
     def act(self, state):
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
-        act_values = self.model.predict(state)
+        act_values = self.model.predict(state, verbose=0)
         return np.argmax(act_values[0])  # returns action
 
     def replay(self, batch_size):
-        minibatch = random.sample(self.memory, batch_size)
-        for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target = (reward + self.gamma *
-                          np.amax(self.model.predict(next_state)[0]))
-            target_f = self.model.predict(state)
-            target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0)
+        # Randomly sample minibatch from the memory
+        minibatch = random.sample(self.memory, min(len(self.memory), batch_size))
+
+        state = np.zeros((batch_size, self.state_size))
+        next_state = np.zeros((batch_size, self.state_size))
+        action, reward, done = [], [], []
+
+        # do this before prediction
+        # for speedup, this could be done on the tensor level
+        # but easier to understand using a loop
+        for i in range(batch_size):
+            state[i] = minibatch[i][0]
+            action.append(minibatch[i][1])
+            reward.append(minibatch[i][2])
+            next_state[i] = minibatch[i][3]
+            done.append(minibatch[i][4])
+
+        # do batch prediction to save speed
+        target = self.model.predict(state, verbose=0)
+        target_next = self.model.predict(next_state, verbose=0)
+
+        for i in range(batch_size):
+            # correction on the Q value for the action used
+            if done[i]:
+                target[i][action[i]] = reward[i]
+            else:
+                # Standard - DQN
+                # DQN chooses the max Q value among next actions
+                # selection and evaluation of action is on the target Q Network
+                # Q_max = max_a' Q_target(s', a')
+                target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
+
+        # Train the Neural Network with batches
+        self.model.fit(state, target, batch_size=batch_size, verbose=0)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
@@ -71,11 +96,11 @@ if __name__ == "__main__":
 
     for e in range(EPISODES):
         state = env.reset()
-        state = np.reshape(state[0], [1, state_size])
+        state = np.reshape(state, [1, state_size])
         for time in range(500):
-            env.render()
+            # env.render()
             action = agent.act(state)
-            next_state, reward, done, _, _ = env.step(action)
+            next_state, reward, done, _ = env.step(action)
             reward = reward if not done else -10
             next_state = np.reshape(next_state, [1, state_size])
             agent.memorize(state, action, reward, next_state, done)
