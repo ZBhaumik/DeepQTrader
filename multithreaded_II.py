@@ -1,5 +1,29 @@
+"""
+Script for training Stock Trading Bot.
+Usage:
+  multithreaded_II.py <train-stock> <val-stock> [--strategy=<strategy>]
+    [--window-size=<window-size>] [--batch-size=<batch-size>]
+    [--episode-count=<episode-count>] [--model-name=<model-name>]
+    [--init-episode=<init-episode>] [--pretrained] 
+
+Options:
+  --strategy=<strategy>             Q-learning strategy to use for training the network. Options:
+                                      `dqn` i.e. Vanilla DQN,
+                                      `t-dqn` i.e. DQN with fixed target distribution,
+                                      `double-dqn` i.e. DQN with separate network for value estimation. [default: t-dqn]
+  --window-size=<window-size>       Size of the n-day window stock data representation
+                                    used as the feature vector. [default: 10]
+  --batch-size=<batch-size>         Number of samples to train on in one mini-batch
+                                    during training. [default: 32]
+  --episode-count=<episode-count>   Number of trading episodes to use for training. [default: 50]
+  --model-name=<model-name>         Name of the pretrained model to use. [default: model_debug]
+  --init-episode=<init-episode>     An initial episode for pausing/resuming training. [default: 1]
+  --pretrained                      Specifies whether to continue training a previously
+                                    trained model (reads `model-name`).
+"""
 #UTILS
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 import math
 import logging
 import random
@@ -100,110 +124,94 @@ import multiprocess as mp
 from parallel_processing import process_chunks
 
 def train_model(agent, episode, data, initial_offset, ep_count=100, batch_size=32, window_size=10, chunk_size=None):
-    if __name__ == "__main__":
-        total_profit = 0
-        data_length = len(data) - 1
+    total_profit = 0
+    data_length = len(data) - 1
 
-        agent.inventory = []
-        avg_loss = [0] * data_length
+    agent.inventory = []
+    avg_loss = [0] * data_length
 
-        for t in range(data_length):
-            bought_price=0
-            state = get_state(data, t, window_size + 1)
-            next_state = get_state(data, t + 1, window_size + 1)
-            action = agent.act(state)
+    for t in range(data_length):
+        bought_price=0
+        state = get_state(data, t, window_size + 1)
+        next_state = get_state(data, t + 1, window_size + 1)
+        action = agent.act(state)
 
-            # Buy
-            if action == 1:  # buy
-                if len(agent.inventory) > 0:
-                    bought_price = agent.inventory.pop(0)
-                else:
-                    agent.inventory.append(data[t])
-            # Sell
-            elif action == 2 and len(agent.inventory) > 0:
+        # Buy
+        if action == 1:  # buy
+            if len(agent.inventory) > 0:
                 bought_price = agent.inventory.pop(0)
-                total_profit += data[t] - bought_price
-            agent.memory.append((state, action, data[t] - bought_price, next_state, 0))
+            else:
+                agent.inventory.append(data[t])
+        # Sell
+        elif action == 2 and len(agent.inventory) > 0:
+            bought_price = agent.inventory.pop(0)
+            total_profit += data[t] - bought_price
+        agent.memory.append((state, action, data[t] - bought_price, next_state, 0))
 
-            if (t == data_length - 1) and len(agent.inventory) > 0:
-                bought_price = agent.inventory.pop(0)
-                total_profit += data[t] - bought_price
+        if (t == data_length - 1) and len(agent.inventory) > 0:
+            bought_price = agent.inventory.pop(0)
+            total_profit += data[t] - bought_price
 
-            # Update model weights every "batch_size" iterations
-            if t % batch_size == 0:
-                agent.train_experience_replay(batch_size)
+        # Update model weights every "batch_size" iterations
+        if t % batch_size == 0:
+            agent.train_experience_replay(batch_size)
 
-        if chunk_size is not None:
-            # Split data into chunks
-            chunks = [(i * chunk_size, i * chunk_size + chunk_size) for i in range(int(len(data) / chunk_size))]
-            chunks[-1] = (chunks[-1][0], len(data))  # handle last chunk which might be smaller than chunk_size
-
-            # Process data chunks in parallel
-            avg_loss = process_chunks(data, window_size, batch_size, chunks, agent)
-
-        # Calculate final profit
-        final_profit = total_profit + initial_offset
-        show_train_result((episode + 1, ep_count, final_profit, avg_loss), 0, initial_offset)
-
-def evaluate_model(agent, data, window_size, debug):
-    if __name__ == '__main__':
-        total_profit = 0
-        data_length = len(data) - 1
-        history = []
-        agent.inventory = deque()
-        
-        state = get_state(data, 0, window_size + 1)
-
-        def process_chunk(chunk):
-            chunk_profit = 0
-            for t in range(chunk[0], chunk[1]):
-                print("A: " + str(t))
-                reward = 0
-                next_state = get_state(data, t + 1, window_size + 1)
-                
-                # select an action
-                action = act(agent, state, is_eval=True)
-
-                # BUY
-                if action == 1:
-                    agent.inventory.append(data[t])
-
-                    history.append((data[t], "BUY"))
-                    if debug:
-                        logging.debug("Buy at: {}".format(format_currency(data[t])))
-                
-                # SELL
-                elif action == 2 and len(agent.inventory) > 0:
-                    bought_price = agent.inventory.popleft()
-                    delta = data[t] - bought_price
-                    reward = delta
-                    chunk_profit += delta
-
-                    history.append((data[t], "SELL"))
-                    if debug:
-                        logging.debug("Sell at: {} | Position: {}".format(
-                            format_currency(data[t]), format_position(data[t] - bought_price)))
-                # HOLD
-                else:
-                    history.append((data[t], "HOLD"))
-
-                done = (t == data_length - 1)
-                agent.memory.append((state, action, reward, next_state, done))
-
-                state = next_state
-            return chunk_profit
-
+    if chunk_size is not None:
         # Split data into chunks
-        chunk_size = int(data_length / mp.cpu_count())
-        chunks = [(i * chunk_size, i * chunk_size + chunk_size) for i in range(mp.cpu_count())]
-        chunks[-1] = (chunks[-1][0], data_length)  # handle last chunk which might be smaller than chunk_size
+        chunks = [(i * chunk_size, i * chunk_size + chunk_size) for i in range(int(len(data) / chunk_size))]
+        chunks[-1] = (chunks[-1][0], len(data))  # handle last chunk which might be smaller than chunk_size
 
         # Process data chunks in parallel
-        with mp.Pool(mp.cpu_count()) as p:
-            chunk_profits = p.map(process_chunk, chunks)
-            total_profit = sum(chunk_profits)
-        
-        return total_profit, history
+        avg_loss = process_chunks(data, window_size, batch_size, chunks, agent)
+
+    # Calculate final profit
+    final_profit = total_profit + initial_offset
+    show_train_result((episode + 1, ep_count, final_profit, avg_loss), 0, initial_offset)
+
+import multiprocess as mp
+
+def evaluate_model_worker(agent, data, window_size, debug, result_queue):
+    total_profit = 0
+    agent.inventory = []
+    state = get_state(data, 0, window_size + 1)
+    for t in range(len(data) - 1):
+        action = agent.act(state)
+    # BUY
+    if action == 1:
+        agent.inventory.append(data[t])
+
+    # SELL
+    elif action == 2 and len(agent.inventory) > 0:
+        bought_price = agent.inventory.pop(0)
+        reward = max(data[t] - bought_price, 0)
+        total_profit += data[t] - bought_price
+
+    if debug:
+        print(f"{data[t]}:{state}:{action}:{total_profit}")
+
+    next_state = get_state(data, t + 1, window_size + 1)
+    state = next_state
+    result_queue.put(total_profit)
+
+def evaluate_model(agent, data, window_size=10, debug=False):
+    """Evaluates the agent's performance on the given data
+    """
+    result_queue = mp.Queue()
+    processes = []
+    for i in range(4):
+        start_index = int(i * len(data) / 4)
+        end_index = int((i + 1) * len(data) / 4)
+        p = mp.Process(target=evaluate_model_worker, args=(agent, data[start_index:end_index], window_size, debug, result_queue))
+        processes.append(p)
+        p.start()
+    total_profit = 0
+    for i in range(4):
+        total_profit += result_queue.get()
+    for p in processes:
+        p.join()
+
+    return total_profit
+
 
 #AGENT
 import random
@@ -376,23 +384,40 @@ import logging
 import coloredlogs
 from docopt import docopt
 
-def main(train_stock, val_stock, window_size, batch_size, ep_count,
+def main(train_stock, val_stock, window_size=10, batch_size=32, ep_count=10,
         strategy="t-dqn", model_name="model_debug", pretrained=False,
-        debug=False, init_episode = 1, n_workers=4):
-    agent = Agent(window_size, strategy=strategy, pretrained=pretrained, model_name=model_name)
-    train_data = yfinance_retrieve(train_stock, 0)
-    val_data = yfinance_retrieve(val_stock, 1)
+        debug=False, init_episode=1):
+        agent = Agent(window_size, strategy=strategy, pretrained=pretrained, model_name=model_name)
+        train_data = yfinance_retrieve(train_stock, 0)
+        val_data = yfinance_retrieve(val_stock, 1)
 
-    initial_offset = val_data[1] - val_data[0]
+        initial_offset = val_data[1] - val_data[0]
+        for episode in range(init_episode, ep_count + 1):
+            print(episode)
+            train_result = train_model(agent, episode, train_data, initial_offset=initial_offset, ep_count=ep_count,
+                                    batch_size=batch_size, window_size=window_size, chunk_size=1)
+            val_result = evaluate_model(agent, val_data, window_size, debug)
+            show_train_result(train_result, val_result, initial_offset)
 
-    for episode in range(init_episode, ep_count + 1):
-        print(episode)
-        train_result = train_model(agent, episode, train_data, initial_offset=initial_offset, ep_count=ep_count,
-                                batch_size=batch_size, window_size=window_size, chunk_size=1)
-        val_result, _ = evaluate_model(agent, val_data, window_size, debug)
-        show_train_result(train_result, val_result, initial_offset)
+if __name__ == "__main__":
+    print("HELLO")
+    args = docopt(__doc__)
+    print("HI")
+    train_stock = args["<train-stock>"]
+    val_stock = args["<val-stock>"]
+    strategy = args["--strategy"]
+    window_size = int(args["--window-size"])
+    batch_size = int(args["--batch-size"])
+    ep_count = int(args["--episode-count"])
+    model_name = args["--model-name"]
+    init_episode = int(args["--init-episode"])
+    pretrained = args["--pretrained"]
+    coloredlogs.install(level="DEBUG")
+    switch_k_backend_device()
 
-
-coloredlogs.install(level="DEBUG")
-switch_k_backend_device()
-main("GOOGL","GOOGL", window_size=10, batch_size=32, ep_count=50, init_episode=1)
+    try:
+        main(train_stock, val_stock, window_size=window_size, batch_size=batch_size,
+             ep_count=ep_count, strategy=strategy, model_name=model_name, 
+             pretrained=pretrained, init_episode=init_episode)
+    except KeyboardInterrupt:
+        print("Aborted!")
