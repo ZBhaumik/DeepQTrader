@@ -2,9 +2,13 @@
 import os
 import math
 import logging
+
 import numpy as np
 
+
 def sigmoid(x):
+    """Performs sigmoid operation
+    """
     try:
         if x < 0:
             return 1 - 1 / (1 + math.exp(x))
@@ -14,6 +18,8 @@ def sigmoid(x):
 
 
 def get_state(data, t, n_days):
+    """Returns an n-day state representation ending at time t
+    """
     d = t - n_days + 1
     block = data[d: t + 1] if d >= 0 else -d * [data[0]] + data[0: t + 1]  # pad with t0
     res = []

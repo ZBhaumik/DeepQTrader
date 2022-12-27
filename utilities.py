@@ -7,8 +7,8 @@ import pandas as pd
 import numpy as np
 
 from tqdm import tqdm
-import keras.backend as K
 import yfinance as yf
+import keras.backend as K
 
 
 # Formats Position
@@ -38,7 +38,8 @@ def show_eval_result(model_name, profit, initial_offset):
     else:
         logging.info('{}: {}\n'.format(model_name, format_position(profit)))
 
-dates = ["2016-10-01","2017-01-01","2017-01-02","2018-01-02","2018-01-03","2019-01-03"]
+
+dates = ["2010-01-01","2017-01-01","2017-01-02","2018-01-02","2018-01-03","2019-01-03"]
 def yfinance_retrieve(stock_name, type):
     type=type*2
     df = yf.download(stock_name, start=dates[type], end=dates[type+1])
