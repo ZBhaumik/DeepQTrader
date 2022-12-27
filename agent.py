@@ -1,32 +1,22 @@
+#AGENT
 import random
-
 from collections import deque
-
 import numpy as np
 import tensorflow as tf
 import keras.backend as K
-
 from keras.models import Sequential
 from keras.models import load_model, clone_model
 from keras.layers import Dense
 from keras.optimizers import Adam
 
-
 def huber_loss(y_true, y_pred, clip_delta=1.0):
-    """Huber loss - Custom Loss Function for Q Learning
-    Links: 	https://en.wikipedia.org/wiki/Huber_loss
-            https://jaromiru.com/2017/05/27/on-using-huber-loss-in-deep-q-learning/
-    """
     error = y_true - y_pred
     cond = K.abs(error) <= clip_delta
     squared_loss = 0.5 * K.square(error)
     quadratic_loss = 0.5 * K.square(clip_delta) + clip_delta * (K.abs(error) - clip_delta)
     return K.mean(tf.where(cond, squared_loss, quadratic_loss))
 
-
 class Agent:
-    """ Stock Trading Bot """
-
     def __init__(self, state_size, strategy="t-dqn", reset_every=1000, pretrained=False, model_name=None):
         self.strategy = strategy
 
@@ -92,107 +82,70 @@ class Agent:
             self.first_iter = False
             return 1 # make a definite buy on the first iter
 
+        state = np.reshape(state, (1, self.state_size))
         action_probs = self.model.predict(state, verbose=0)
         return np.argmax(action_probs[0])
 
     def train_experience_replay(self, batch_size):
-        """Train on previous experiences in memory
-        """
-        minibatch = random.sample(self.memory, min(len(self.memory), batch_size))
+      """Train on previous experiences in memory
+      """
+      # Sample a mini-batch from memory
+      mini_batch = random.sample(self.memory, batch_size)
+      states, actions, rewards, next_states, dones = zip(*mini_batch)
 
-        state = np.zeros((batch_size, self.state_size))
-        next_state = np.zeros((batch_size, self.state_size))
-        action, reward, done = [], [], []
+      # Convert mini-batch elements to Numpy arrays
+      states = np.array(states)
+      states = np.reshape(states, (-1, 10))
+      actions = np.array(actions)
+      rewards = np.array(rewards)
+      next_states = np.array(next_states)
+      next_states = np.reshape(next_states, (-1, 10))
+      dones = np.array(dones, dtype=np.uint8)
 
-        # do this before prediction
-        # for speedup, this could be done on the tensor level
-        # but easier to understand using a loop
-        for i in range(batch_size):
-            state[i] = minibatch[i][0]
-            action.append(minibatch[i][1])
-            reward.append(minibatch[i][2])
-            next_state[i] = minibatch[i][3]
-            done.append(minibatch[i][4])
+      # DQN with fixed targets
+      if self.strategy == "t-dqn":
+          # Reset target model weights every "reset_every" iterations
+          if self.n_iter % self.reset_every == 0:
+              self.target_model.set_weights(self.model.get_weights())
 
-        # do batch prediction to save speed
-        target = self.model.predict(state, verbose=0)
-        target_next = self.model.predict(next_state, verbose=0)
-        X_train, y_train = [], []
-        
-        # DQN
-        if self.strategy == "dqn":
-            for i in range(batch_size):
-            # correction on the Q value for the action used
-                if done[i]:
-                    target[i][action[i]] = reward[i]
-                else:
-                    # Standard - DQN
-                    # DQN chooses the max Q value among next actions
-                    # selection and evaluation of action is on the target Q Network
-                    # Q_max = max_a' Q_target(s', a')
-                    target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
-        else:
-            raise NotImplementedError()
-        # update q-function parameters based on huber loss gradient
-        loss = self.model.fit(state, target, batch_size=batch_size, verbose=0).history["loss"][0]
+          # Calculate targets
+          targets = rewards + np.where(dones, 0, self.gamma * np.amax(self.target_model.predict(next_states), axis=1))
 
-        # as the training goes on we want the agent to
-        # make less random and more optimal decisions
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-        return loss
+          # Predict Q-values for current states
+          q_values = self.model.predict(states)
+
+          # Update targets for the actions taken in the mini-batch
+          q_values[range(batch_size), actions] = targets
+
+      # Double DQN
+      elif self.strategy == "double-dqn":
+          # Reset target model weights every "reset_every" iterations
+          if self.n_iter % self.reset_every == 0:
+              self.target_model.set_weights(self.model.get_weights())
+
+          # Predict Q-values for current states
+          q_values = self.model.predict(states)
+
+          # Calculate targets
+          targets = rewards + np.where(dones, 0, self.gamma * self.target_model.predict(next_states)[range(batch_size), np.argmax(self.model.predict(next_states), axis=1)])
+
+          # Update targets for the actions taken in the mini-batch
+          q_values[range(batch_size), actions] = targets
+
+      else:
+          raise NotImplementedError()
+
+      # Update model weights based on huber loss gradient
+      loss = self.model.fit(states, q_values, epochs=1, verbose=0).history["loss"][0]
+
+      # Decrease epsilon to make the agent make more optimal decisions
+      if self.epsilon > self.epsilon_min:
+          self.epsilon *= self.epsilon_decay
+
+      return loss
 
     def save(self, episode):
         self.model.save("models/{}_{}".format(self.model_name, episode))
 
     def load(self):
         return load_model("models/" + self.model_name, custom_objects=self.custom_objects)
-        """elif self.strategy == "t-dqn":
-            if self.n_iter % self.reset_every == 0:
-                # reset target model weights
-                self.target_model.set_weights(self.model.get_weights())
-            for i in range(batch_size):
-            # correction on the Q value for the action used
-                if done[i]:
-                    target[i][action[i]] = reward[i]
-                else:
-                    # Standard - DQN
-                    # DQN chooses the max Q value among next actions
-                    # selection and evaluation of action is on the target Q Network
-                    # Q_max = max_a' Q_target(s', a')
-                    target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
-            for state, action, reward, next_state, done in mini_batch:
-                if done:
-                    target = reward
-                else:
-                    # approximate deep q-learning equation with fixed targets
-                    target = reward + self.gamma * np.amax(self.target_model.predict(next_state)[0])
-
-                # estimate q-values based on current state
-                q_values = self.model.predict(state)
-                # update the target for current action based on discounted reward
-                q_values[0][action] = target
-
-                X_train.append(state[0])
-                y_train.append(q_values[0])
-
-        # Double DQN
-        elif self.strategy == "double-dqn":
-            if self.n_iter % self.reset_every == 0:
-                # reset target model weights
-                self.target_model.set_weights(self.model.get_weights())
-
-            for state, action, reward, next_state, done in mini_batch:
-                if done:
-                    target = reward
-                else:
-                    # approximate double deep q-learning equation
-                    target = reward + self.gamma * self.target_model.predict(next_state)[0][np.argmax(self.model.predict(next_state)[0])]
-
-                # estimate q-values based on current state
-                q_values = self.model.predict(state)
-                # update the target for current action based on discounted reward
-                q_values[0][action] = target
-
-                X_train.append(state[0])
-                y_train.append(q_values[0]) """     
