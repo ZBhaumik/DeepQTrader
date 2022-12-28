@@ -28,6 +28,7 @@ def process_chunk(args):
     memory = deque(maxlen=2000)
     initial_offset = 0.0
     for t in range(chunk[0], chunk[1]):
+        print(t)
         state = get_state(data, t, window_size + 1)
         action = act(agent, state)
 
@@ -56,11 +57,9 @@ def process_chunk(args):
         if t == chunk[1] - 1:
             reward = initial_offset
         memory.append((state, action, data[t] - bought_price, next_state, reward))
-
-        # Update model weights every "batch_size" iterations
-        if t % batch_size == 0:
-            loss = exp_replay(agent, batch_size, memory)
-            total_loss += loss
-            n_iter += 1
+        
+        loss = exp_replay(agent, batch_size, memory)
+        total_loss += loss
+        n_iter += 1
 
     return total_loss / n_iter
